@@ -2,10 +2,43 @@ require "json"
 require "xml"
 require "sqlite3"
 
+if LibSQLite3.libversion < 3035000
+  Log.fatal { "Ktistec requires SQLite3 version 3.35.0 or later" }
+  exit -1
+end
+
+module DB
+  abstract class Statement
+    protected def emit_log(args : Enumerable)
+      # override the library definition of `emit_log` to silence it.
+    end
+  end
+end
+
+{% if flag?(:"ktistec:experimental") %}
+  require "benchmark"
+
+  # See: https://www.sqlite.org/lang_analyze.html
+
+  module SQLite3
+    class Connection
+      def do_close
+        time = Benchmark.realtime { check LibSQLite3.exec(self, "PRAGMA analysis_limit=400; PRAGMA optimize;", nil, nil, nil) }
+        Log.info { "Updating statistics: #{sprintf("%.3fms", time.total_milliseconds)}" }
+      ensure
+        previous_def
+      end
+    end
+  end
+{% end %}
+
 private alias Supported = JSON::Serializable | Array(JSON::Serializable) | Array(String)
 
 class SQLite3::ResultSet
   {% for type in Supported.union_types %}
+    def read(type : {{type}}.class)
+      (json = read(String)) ; type.from_json(json)
+    end
     def read(type : {{type}}?.class)
       (json = read(String?)) ? type.from_json(json) : nil
     end
@@ -14,7 +47,7 @@ end
 
 class SQLite3::Statement
   {% for type in Supported.union_types %}
-    private def bind_arg(index, value : {{type}}?)
+    private def bind_arg(index, value : {{type}})
       bind_arg(index, value.to_json)
     end
   {% end %}
@@ -24,6 +57,7 @@ lib LibSQLite3
   fun config = sqlite3_config(Int32, ...) : Code
   fun memory_used = sqlite3_memory_used() : Int64
   fun result_text = sqlite3_result_text(SQLite3Context, UInt8*, Int32, Void*) : Nil
+  fun libversion = sqlite3_libversion_number() : Int32
 end
 
 module Ktistec

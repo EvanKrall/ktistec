@@ -22,6 +22,7 @@ class ContentRules
 
   Ktistec::Rule.make_pattern(Actor, ActivityPub::Actor, properties: [:iri, :followers, :following])
   Ktistec::Rule.make_pattern(Activity, ActivityPub::Activity, associations: [:actor])
+  Ktistec::Rule.make_pattern(ObjectActivity, ActivityPub::Activity::ObjectActivity, associations: [:actor, :object])
   Ktistec::Rule.make_pattern(Object, ActivityPub::Object, associations: [:in_reply_to, :attributed_to], properties: [:content, :thread])
   Ktistec::Rule.make_pattern(Hashtag, Tag::Hashtag, associations: [subject], properties: [name, href])
   Ktistec::Rule.make_pattern(Mention, Tag::Mention, associations: [subject], properties: [name, href])
@@ -33,14 +34,13 @@ class ContentRules
   Ktistec::Rule.make_pattern(UndoActivity, ActivityPub::Activity::Undo, associations: [:object])
   Ktistec::Rule.make_pattern(Outbox, Relationship::Content::Outbox, associations: [:owner, :activity])
   Ktistec::Rule.make_pattern(Inbox, Relationship::Content::Inbox, associations: [:owner, :activity])
-  Ktistec::Rule.make_pattern(Notification, Relationship::Content::Notification, associations: [:owner, :activity])
   Ktistec::Rule.make_pattern(NotificationLike, Relationship::Content::Notification::Like, associations: [:owner, :activity])
   Ktistec::Rule.make_pattern(NotificationAnnounce, Relationship::Content::Notification::Announce, associations: [:owner, :activity])
   Ktistec::Rule.make_pattern(NotificationFollow, Relationship::Content::Notification::Follow, associations: [:owner, :activity])
-  Ktistec::Rule.make_pattern(NotificationHashtag, Relationship::Content::Notification::Hashtag, associations: [:owner, :activity])
-  Ktistec::Rule.make_pattern(NotificationMention, Relationship::Content::Notification::Mention, associations: [:owner, :activity])
-  Ktistec::Rule.make_pattern(NotificationReply, Relationship::Content::Notification::Reply, associations: [:owner, :activity])
-  Ktistec::Rule.make_pattern(NotificationThread, Relationship::Content::Notification::Thread, associations: [:owner, :activity])
+  Ktistec::Rule.make_pattern(NotificationHashtag, Relationship::Content::Notification::Hashtag, associations: [:owner, :object])
+  Ktistec::Rule.make_pattern(NotificationMention, Relationship::Content::Notification::Mention, associations: [:owner, :object])
+  Ktistec::Rule.make_pattern(NotificationReply, Relationship::Content::Notification::Reply, associations: [:owner, :object])
+  Ktistec::Rule.make_pattern(NotificationThread, Relationship::Content::Notification::Thread, associations: [:owner, :object])
   Ktistec::Rule.make_pattern(Timeline, Relationship::Content::Timeline, associations: [:owner, :object])
   Ktistec::Rule.make_pattern(TimelineAnnounce, Relationship::Content::Timeline::Announce, associations: [:owner, :object])
   Ktistec::Rule.make_pattern(TimelineCreate, Relationship::Content::Timeline::Create, associations: [:owner, :object])
@@ -54,9 +54,11 @@ class ContentRules
   class Incoming < School::Relationship(ActivityPub::Actor, ActivityPub::Activity) end
   class InMailboxOf < School::Relationship(ActivityPub::Activity, ActivityPub::Actor) end
   class IsRecipient < School::Property(String) end
+  class NotificationFor < School::Property(ActivityPub::Object) end
 
   Ktistec::Compiler.register_constant(ContentRules::Actor)
   Ktistec::Compiler.register_constant(ContentRules::Activity)
+  Ktistec::Compiler.register_constant(ContentRules::ObjectActivity)
   Ktistec::Compiler.register_constant(ContentRules::Object)
   Ktistec::Compiler.register_constant(ContentRules::Hashtag)
   Ktistec::Compiler.register_constant(ContentRules::Mention)
@@ -68,7 +70,6 @@ class ContentRules
   Ktistec::Compiler.register_constant(ContentRules::UndoActivity)
   Ktistec::Compiler.register_constant(ContentRules::Outbox)
   Ktistec::Compiler.register_constant(ContentRules::Inbox)
-  Ktistec::Compiler.register_constant(ContentRules::Notification)
   Ktistec::Compiler.register_constant(ContentRules::NotificationLike)
   Ktistec::Compiler.register_constant(ContentRules::NotificationAnnounce)
   Ktistec::Compiler.register_constant(ContentRules::NotificationFollow)
@@ -88,6 +89,7 @@ class ContentRules
   Ktistec::Compiler.register_constant(ContentRules::Outgoing)
   Ktistec::Compiler.register_constant(ContentRules::InMailboxOf)
   Ktistec::Compiler.register_constant(ContentRules::IsRecipient)
+  Ktistec::Compiler.register_constant(ContentRules::NotificationFor)
 
   Ktistec::Compiler.register_accessor(iri)
   Ktistec::Compiler.register_accessor(content)
@@ -162,6 +164,8 @@ class ContentRules
   end
 
   def run
+    School::Fact.clear!
+    with School::Fact yield
     self.class.domain.run
   end
 end

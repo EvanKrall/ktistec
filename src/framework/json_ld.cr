@@ -16,7 +16,7 @@ module Ktistec
     #
     def self.expand(body, loader = Loader.new)
       body = JSON.parse(body) if body.is_a?(String | IO)
-      Log.info { body }
+      Log.debug { body }
       expand(
         body,
         context(body["@context"]?, loader),
@@ -143,7 +143,7 @@ module Ktistec
         end
         CONTEXTS.dig("#{uri.host}#{uri.path}/context.jsonld", "@context")
       rescue KeyError
-        Log.info { "uncached external context not loaded: #{url}" }
+        Log.warn { "uncached external context not loaded: #{url}" }
         empty
       end
     end

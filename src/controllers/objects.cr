@@ -72,7 +72,7 @@ class ObjectsController
       not_found
     end
 
-    object.delete
+    object.delete!
 
     redirect back_path
   end
@@ -128,7 +128,7 @@ class ObjectsController
   post "/remote/objects/:id/block" do |env|
     not_found unless (object = ActivityPub::Object.find?(id_param(env)))
 
-    object.block
+    object.block!
 
     redirect back_path
   end
@@ -136,7 +136,7 @@ class ObjectsController
   post "/remote/objects/:id/unblock" do |env|
     not_found unless (object = ActivityPub::Object.find?(id_param(env)))
 
-    object.unblock
+    object.unblock!
 
     redirect back_path
   end
@@ -196,10 +196,6 @@ class ObjectsController
       unless message || (object && object.attributed_to?(env.account.actor, dereference: true))
         message = "The post's author could not be found or could not be retrieved."
       end
-    rescue Socket::Addrinfo::Error
-      message = "There was a hostname lookup failure and the post could not be retrieved."
-    rescue Socket::ConnectError
-      message = "The server could not connect to the remote host and the post could not be retrieved."
     end
 
     if message

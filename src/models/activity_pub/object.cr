@@ -1,6 +1,7 @@
 require "json"
 
 require "./actor"
+require "./collection"
 require "../activity_pub"
 require "../activity_pub/mixins/blockable"
 require "../relationship/content/approved"
@@ -43,10 +44,11 @@ module ActivityPub
     belongs_to in_reply_to, class_name: ActivityPub::Object, foreign_key: in_reply_to_iri, primary_key: iri
 
     @[Persistent]
-    property thread : String?
+    property replies_iri : String?
+    belongs_to replies, class_name: ActivityPub::Collection, foreign_key: replies_iri, primary_key: iri
 
     @[Persistent]
-    property replies : String?
+    property thread : String?
 
     @[Persistent]
     property to : Array(String)?
@@ -295,7 +297,7 @@ module ActivityPub
              AND t.blocked_at IS NULL
              AND a.undone_at IS NULL
       QUERY
-      Ktistec.database.scalar(query).as(Int64)
+      Object.scalar(query).as(Int64)
     end
 
     @[Assignable]
@@ -347,9 +349,7 @@ module ActivityPub
         FROM objects AS o, replies_to AS r
        WHERE o.iri IN (r.iri)
       QUERY
-      Ktistec.database.query_one(query, iri) do |rs|
-        rs.read(Int64?).try { |replies_count| self.replies_count = replies_count }
-      end
+      Object.scalar(query, iri).as(Int64?).try { |replies_count| self.replies_count = replies_count }
       self
     end
 
@@ -365,9 +365,7 @@ module ActivityPub
             AND ((o.in_reply_to_iri IS NULL) OR (r.id IS NOT NULL))
       QUERY
       from_iri = approved_by.responds_to?(:iri) ? approved_by.iri : approved_by.to_s
-      Ktistec.database.query_one(query, iri, from_iri) do |rs|
-        rs.read(Int64?).try { |replies_count| self.replies_count = replies_count }
-      end
+      Object.scalar(query, iri, from_iri).as(Int64?).try { |replies_count| self.replies_count = replies_count }
       self
     end
 
@@ -560,8 +558,9 @@ module ActivityPub
 
     def validate_model
       if @canonical_path_changed && (canonical_path = @canonical_path)
-        canonical = Relationship::Content::Canonical.find?(to_iri: path) || Relationship::Content::Canonical.new(to_iri: path)
-        canonical.assign(from_iri: canonical_path)
+        canonical =
+          Relationship::Content::Canonical.find?(to_iri: path).try(&.assign(from_iri: canonical_path)) ||
+          Relationship::Content::Canonical.new(to_iri: path, from_iri: canonical_path)
         unless canonical.valid?
           canonical.errors.each do |key, value|
             errors["canonical_path.#{key}"] = value
@@ -659,7 +658,11 @@ module ActivityPub
         "published" => (p = dig?(json, "https://www.w3.org/ns/activitystreams#published")) ? Time.parse_rfc3339(p) : nil,
         "attributed_to_iri" => dig_id?(json, "https://www.w3.org/ns/activitystreams#attributedTo"),
         "in_reply_to_iri" => dig_id?(json, "https://www.w3.org/ns/activitystreams#inReplyTo"),
-        "replies" => dig_id?(json, "https://www.w3.org/ns/activitystreams#replies"),
+        # either pick up the collection's id or the embedded collection
+        "replies_iri" => json.dig?("https://www.w3.org/ns/activitystreams#replies").try(&.as_s?),
+        "replies" => if (replies = json.dig?("https://www.w3.org/ns/activitystreams#replies")) && replies.as_h?
+          Collection.from_json_ld(replies)
+        end,
         "to" => to = dig_ids?(json, "https://www.w3.org/ns/activitystreams#to"),
         "cc" => cc = dig_ids?(json, "https://www.w3.org/ns/activitystreams#cc"),
         "name" => dig?(json, "https://www.w3.org/ns/activitystreams#name", "und"),

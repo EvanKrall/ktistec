@@ -17,6 +17,14 @@ class Task
 
   @@table_name = "tasks"
 
+  # The table includes a column named "failures" that subclasses can
+  # define and use to serialize information about task failures.
+
+  # The table includes a column named "state" that subclasses can
+  # define and use to serialize information about task state.
+
+  @@table_columns = ["failures", "state"]
+
   @[Persistent]
   property source_iri : String
 
@@ -24,26 +32,15 @@ class Task
   property subject_iri : String
 
   @[Persistent]
-  property failures : Array(Failure) { [] of Failure }
-
-  struct Failure
-    include JSON::Serializable
-
-    property description : String
-
-    property timestamp : Time
-
-    def initialize(@description, @timestamp = Time.utc)
-    end
-  end
-
-  @[Persistent]
+  @[Insignificant]
   property running : Bool { false }
 
   @[Persistent]
+  @[Insignificant]
   property complete : Bool { false }
 
   @[Persistent]
+  @[Insignificant]
   property backtrace : Array(String)?
 
   @[Persistent]
@@ -60,13 +57,45 @@ class Task
     next_attempt_at.nil? || next_attempt_at.try(&.<(now))
   end
 
-  def self.scheduled(now = Time.utc)
-    query = <<-SQL
-      running = 0 AND complete = 0 AND backtrace IS NULL
-      AND (next_attempt_at IS NULL OR next_attempt_at < ?)
+  private def self.compare_times(a : Time?, b : Time?)
+    if a == b
+      0
+    elsif a && b
+      a <=> b
+    elsif a
+      1
+    elsif b
+      -1
+    end
+  end
+
+  def self.scheduled(now = Time.utc, reserve = false)
+    if reserve
+      query = <<-SQL
+         UPDATE tasks
+            SET running = 1
+          WHERE running = 0 AND complete = 0 AND backtrace IS NULL
+            AND (next_attempt_at IS NULL OR next_attempt_at < ?)
+      RETURNING #{columns}
+      SQL
+      query_all(query, now).sort do |a, b|
+        # RETURNING does not provide a means to guarantee ordering
+        if (result = compare_times(a.next_attempt_at, b.next_attempt_at)) == 0
+          compare_times(a.created_at, b.created_at)
+        else
+          result
+        end
+      end
+    else
+      query = <<-SQL
+          SELECT #{columns}
+          FROM tasks
+         WHERE running = 0 AND complete = 0 AND backtrace IS NULL
+           AND (next_attempt_at IS NULL OR next_attempt_at < ?)
       ORDER BY next_attempt_at, created_at
-    SQL
-    where(query, now)
+      SQL
+      query_all(query, now)
+    end
   end
 
   def schedule(@next_attempt_at = nil)
@@ -78,7 +107,4 @@ class Task
   def perform
     raise NotImplementedError.new("Task#perform must be implemented in each subclass")
   end
-
-  @[Persistent]
-  property state : String?
 end

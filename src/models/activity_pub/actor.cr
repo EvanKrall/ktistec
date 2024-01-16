@@ -113,6 +113,10 @@ module ActivityPub
     @[Persistent]
     property attachments : Array(Attachment)?
 
+    @[Persistent]
+    @[Insignificant]
+    property down_at : Time?
+
     def before_validate
       if changed?(:username)
         clear!(:username)
@@ -154,6 +158,26 @@ module ActivityPub
       end
     end
 
+    def down?
+      !!down_at
+    end
+
+    def down!
+      @down_at = Time.local
+      update_property(:down_at, @down_at) unless new_record?
+      self
+    end
+
+    def up?
+      !down_at
+    end
+
+    def up!
+      @down_at = nil
+      update_property(:down_at, @down_at) unless new_record?
+      self
+    end
+
     def follow(other : Actor, **options)
       Relationship::Social::Follow.new(**options.merge({actor: self, object: other}))
     end
@@ -193,53 +217,17 @@ module ActivityPub
     end
 
     def all_following(page = 1, size = 10, public = true)
-      {% begin %}
-        {% vs = @type.instance_vars.select(&.annotation(Persistent)) %}
-        Ktistec::Util::PaginatedArray(Actor).new.tap do |array|
-          Ktistec.database.query(
-            query(Relationship::Social::Follow, :to_iri, :from_iri, public),
-            self.iri, self.iri, ((page - 1) * size).to_i, size.to_i + 1
-          ) do |rs|
-            rs.each do
-              array <<
-                Actor.new(
-                 {% for v in vs %}
-                   {{v}}: rs.read({{v.type}}),
-                 {% end %}
-                )
-            end
-          end
-          if array.size > size
-            array.more = true
-            array.pop
-          end
-        end
-      {% end %}
+      Actor.query_and_paginate(
+        query(Relationship::Social::Follow, :to_iri, :from_iri, public),
+        self.iri, self.iri, page: page, size: size
+      )
     end
 
     def all_followers(page = 1, size = 10, public = false)
-      {% begin %}
-        {% vs = @type.instance_vars.select(&.annotation(Persistent)) %}
-        Ktistec::Util::PaginatedArray(Actor).new.tap do |array|
-          Ktistec.database.query(
-            query(Relationship::Social::Follow, :from_iri, :to_iri, public),
-            self.iri, self.iri, ((page - 1) * size).to_i, size.to_i + 1
-          ) do |rs|
-            rs.each do
-              array <<
-                Actor.new(
-                 {% for v in vs %}
-                   {{v}}: rs.read({{v.type}}),
-                 {% end %}
-                )
-            end
-          end
-          if array.size > size
-            array.more = true
-            array.pop
-          end
-        end
-      {% end %}
+      Actor.query_and_paginate(
+        query(Relationship::Social::Follow, :from_iri, :to_iri, public),
+        self.iri, self.iri, page: page, size: size
+      )
     end
 
     def drafts(page = 1, size = 10)
@@ -382,7 +370,7 @@ module ActivityPub
             AND obj.blocked_at is NULL
             AND a.undone_at IS NULL
       QUERY
-      Ktistec.database.scalar(query, self.iri, object.iri).as(Int64) > 0
+      Activity.scalar(query, self.iri, object.iri).as(Int64) > 0
     end
 
     def in_outbox(page = 1, size = 10, public = true)
@@ -682,7 +670,7 @@ module ActivityPub
              AND c.blocked_at IS NULL
              AND t.created_at > ?
       QUERY
-      Ktistec.database.scalar(query, iri, since).as(Int64)
+      Timeline.scalar(query, iri, since).as(Int64)
     end
 
     private alias Notification = Relationship::Content::Notification
@@ -691,47 +679,55 @@ module ActivityPub
     #
     # Meant to be called on local (not cached) actors.
     #
-    # Filters out notifications for activities that have associated
-    # objects that have been deleted. Does not filter out activities
-    # that are not associated with an object since some activities,
-    # like follows, are associated with actors. Doesn't consider
-    # actors that have been deleted, since follows -- the activities
-    # we care about in that case -- are associated with the actor on
-    # which this method is called.
-    #
     def notifications(page = 1, size = 10)
       query = <<-QUERY
          SELECT #{Notification.columns(prefix: "n")}
            FROM relationships AS n
-           JOIN activities AS a
+      LEFT JOIN activities AS a
              ON a.iri = n.to_iri
-           JOIN actors AS c
+      LEFT JOIN actors AS c
              ON c.iri = a.actor_iri
       LEFT JOIN objects AS o
              ON o.iri = a.object_iri
+      LEFT JOIN objects AS e
+             ON e.iri = n.to_iri
+      LEFT JOIN actors AS t
+             ON t.iri = e.attributed_to_iri
           WHERE n.from_iri = ?
             AND n.type IN (#{Notification.all_subtypes.map(&.inspect).join(",")})
-            AND c.deleted_at IS null
-            AND c.blocked_at IS null
-            AND o.deleted_at IS null
-            AND o.blocked_at IS null
-            AND a.undone_at IS null
+            AND a.undone_at IS NULL
+            AND c.deleted_at IS NULL
+            AND c.blocked_at IS NULL
+            AND o.deleted_at IS NULL
+            AND o.blocked_at IS NULL
+            AND e.deleted_at IS NULL
+            AND e.blocked_at IS NULL
+            AND t.deleted_at IS NULL
+            AND t.blocked_at IS NULL
             AND n.id NOT IN (
                SELECT n.id
                  FROM relationships AS n
-                 JOIN activities AS a
+            LEFT JOIN activities AS a
                    ON a.iri = n.to_iri
-                 JOIN actors AS c
+            LEFT JOIN actors AS c
                    ON c.iri = a.actor_iri
             LEFT JOIN objects AS o
                    ON o.iri = a.object_iri
+            LEFT JOIN objects AS e
+                   ON e.iri = n.to_iri
+            LEFT JOIN actors AS t
+                   ON t.iri = e.attributed_to_iri
                 WHERE n.from_iri = ?
                   AND n.type IN (#{Notification.all_subtypes.map(&.inspect).join(",")})
-                  AND c.deleted_at IS null
-                  AND c.blocked_at IS null
-                  AND o.deleted_at IS null
-                  AND o.blocked_at IS null
-                  AND a.undone_at IS null
+                  AND a.undone_at IS NULL
+                  AND c.deleted_at IS NULL
+                  AND c.blocked_at IS NULL
+                  AND o.deleted_at IS NULL
+                  AND o.blocked_at IS NULL
+                  AND e.deleted_at IS NULL
+                  AND e.blocked_at IS NULL
+                  AND t.deleted_at IS NULL
+                  AND t.blocked_at IS NULL
              ORDER BY n.created_at DESC
                 LIMIT ?
             )
@@ -750,22 +746,30 @@ module ActivityPub
       query = <<-QUERY
          SELECT count(*)
            FROM relationships AS n
-           JOIN activities AS a
+      LEFT JOIN activities AS a
              ON a.iri = n.to_iri
-           JOIN actors AS c
+      LEFT JOIN actors AS c
              ON c.iri = a.actor_iri
       LEFT JOIN objects AS o
              ON o.iri = a.object_iri
+      LEFT JOIN objects AS e
+             ON e.iri = n.to_iri
+      LEFT JOIN actors AS t
+             ON t.iri = e.attributed_to_iri
           WHERE n.from_iri = ?
             AND n.type IN (#{Notification.all_subtypes.map(&.inspect).join(",")})
-            AND c.deleted_at IS null
-            AND c.blocked_at IS null
-            AND o.deleted_at IS null
-            AND o.blocked_at IS null
-            AND a.undone_at IS null
+            AND a.undone_at IS NULL
+            AND c.deleted_at IS NULL
+            AND c.blocked_at IS NULL
+            AND o.deleted_at IS NULL
+            AND o.blocked_at IS NULL
+            AND e.deleted_at IS NULL
+            AND e.blocked_at IS NULL
+            AND t.deleted_at IS NULL
+            AND t.blocked_at IS NULL
             AND n.created_at > ?
       QUERY
-      Ktistec.database.scalar(query, iri, since).as(Int64)
+      Notification.scalar(query, iri, since).as(Int64)
     end
 
     def approve(object)

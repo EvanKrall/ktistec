@@ -152,8 +152,10 @@ def delete_factory(actor_iri = nil, actor = false, object_iri = nil, object = fa
   activity_factory(ActivityPub::Activity::Delete, **{actor_iri: actor_iri, actor: actor, object_iri: object_iri, object: object}.merge(options))
 end
 
-def follow_factory(**options)
-  activity_factory(ActivityPub::Activity::Follow, **options)
+def follow_factory(actor_iri = nil, actor = false, object_iri = nil, object = false, **options)
+  actor = actor_factory unless actor_iri || actor.nil? || actor
+  object = actor_factory unless object_iri || object.nil? || object
+  activity_factory(ActivityPub::Activity::Follow, **{actor_iri: actor_iri, actor: actor, object_iri: object_iri, object: object}.merge(options))
 end
 
 def accept_factory(**options)
@@ -184,6 +186,34 @@ def notification_factory(clazz = Relationship::Content::Notification, owner_iri 
   relationship_factory(clazz, **{from_iri: owner_iri, owner: owner, to_iri: activity_iri, activity: activity}.merge(options))
 end
 
+def notification_announce_factory(**options)
+  notification_factory(Relationship::Content::Notification::Announce, **options)
+end
+
+def notification_like_factory(**options)
+  notification_factory(Relationship::Content::Notification::Like, **options)
+end
+
+def notification_follow_factory(**options)
+  notification_factory(Relationship::Content::Notification::Follow, **options)
+end
+
+def notification_hashtag_factory(**options)
+  notification_factory(Relationship::Content::Notification::Hashtag, **options)
+end
+
+def notification_mention_factory(**options)
+  notification_factory(Relationship::Content::Notification::Mention, **options)
+end
+
+def notification_thread_factory(**options)
+  notification_factory(Relationship::Content::Notification::Thread, **options)
+end
+
+def notification_reply_factory(**options)
+  notification_factory(Relationship::Content::Notification::Reply, **options)
+end
+
 def timeline_factory(clazz = Relationship::Content::Timeline, owner_iri = nil, owner = false, object_iri = nil, object = false, **options)
   owner = actor_factory unless owner_iri || owner.nil? || owner
   object = object_factory(attributed_to_iri: owner_iri || owner.responds_to?(:iri) && owner.iri, attributed_to: owner) unless object_iri || object.nil? || object
@@ -210,8 +240,10 @@ def outbox_relationship_factory(owner_iri = nil, owner = false, activity_iri = n
   relationship_factory(Relationship::Content::Outbox, **{from_iri: owner_iri, owner: owner, to_iri: activity_iri, activity: activity}.merge(options))
 end
 
-def follow_relationship_factory(confirmed = true, **options)
-  relationship_factory(Relationship::Social::Follow, **{confirmed: confirmed}.merge(options))
+def follow_relationship_factory(confirmed = true, actor_iri = nil, actor = false, object_iri = nil, object = false, **options)
+  actor = actor_factory unless actor_iri || actor.nil? || actor
+  object = actor_factory unless object_iri || object.nil? || object
+  relationship_factory(Relationship::Social::Follow, **{confirmed: confirmed, from_iri: actor_iri, actor: actor, to_iri: object_iri, object: object}.merge(options))
 end
 
 def follow_hashtag_relationship_factory(**options)
@@ -296,8 +328,24 @@ def put_in_outbox(owner : ActivityPub::Actor, object : ActivityPub::Object)
   Factory.create(:outbox_relationship, owner: owner, activity: activity)
 end
 
-def put_in_notifications(owner : ActivityPub::Actor, activity : ActivityPub::Activity)
-  Factory.create(:notification, owner: owner, activity: activity)
+def put_in_notifications(owner : ActivityPub::Actor, *, mention : ActivityPub::Activity::Create)
+  Factory.create(:notification_mention, owner: owner, object: mention.object)
+end
+
+def put_in_notifications(owner : ActivityPub::Actor, *, reply : ActivityPub::Activity::Create)
+  Factory.create(:notification_reply, owner: owner, object: reply.object)
+end
+
+def put_in_notifications(owner : ActivityPub::Actor, activity : ActivityPub::Activity::Announce)
+  Factory.create(:notification_announce, owner: owner, activity: activity)
+end
+
+def put_in_notifications(owner : ActivityPub::Actor, activity : ActivityPub::Activity::Like)
+  Factory.create(:notification_like, owner: owner, activity: activity)
+end
+
+def put_in_notifications(owner : ActivityPub::Actor, activity : ActivityPub::Activity::Follow)
+  Factory.create(:notification_follow, owner: owner, activity: activity)
 end
 
 def put_in_timeline(owner : ActivityPub::Actor, object : ActivityPub::Object)

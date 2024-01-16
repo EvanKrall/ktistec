@@ -104,6 +104,8 @@ class RelationshipsController
 
     # 4
 
+    actor.up!
+
     activity.actor = actor
 
     case activity
@@ -242,11 +244,11 @@ class RelationshipsController
 
     activity.save
 
-    School::Fact.clear!
-    recipients = [activity.to, activity.cc, deliver_to].flatten.compact.uniq
-    recipients.each { |recipient| School::Fact.assert(ContentRules::IsRecipient.new(recipient)) }
-    School::Fact.assert(ContentRules::Incoming.new(account.actor, activity))
-    ContentRules.new.run
+    ContentRules.new.run do
+      recipients = [activity.to, activity.cc, deliver_to].flatten.compact.uniq
+      recipients.each { |recipient| assert ContentRules::IsRecipient.new(recipient) }
+      assert ContentRules::Incoming.new(account.actor, activity)
+    end
 
     # handle side-effects
 
@@ -276,26 +278,21 @@ class RelationshipsController
           follow.destroy
         end
       end
-      activity.object.undo
+      activity.object.undo!
     when ActivityPub::Activity::Delete
       case (object = activity.object?)
       when ActivityPub::Object
-        object.delete
+        object.delete!
       when ActivityPub::Actor
-        object.delete
+        object.delete!
       end
     end
 
-    task = Task::Receive.new(
+    Task::Receive.new(
       receiver: account.actor,
       activity: activity,
       deliver_to: deliver_to
-    )
-    if Kemal.config.env == "test"
-      task.perform
-    else
-      task.schedule
-    end
+    ).schedule
 
     ok
   end

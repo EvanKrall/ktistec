@@ -239,9 +239,9 @@ class RelationshipsController
 
     activity.save
 
-    School::Fact.clear!
-    School::Fact.assert(ContentRules::Outgoing.new(account.actor, activity))
-    ContentRules.new.run
+    ContentRules.new.run do
+      assert ContentRules::Outgoing.new(account.actor, activity)
+    end
 
     # handle side-effects
 
@@ -269,25 +269,20 @@ class RelationshipsController
           follow.destroy
         end
       end
-      activity.object.undo
+      activity.object.undo!
     when ActivityPub::Activity::Delete
       case (object = activity.object?)
       when ActivityPub::Object
-        object.delete
+        object.delete!
       when ActivityPub::Actor
-        object.delete
+        object.delete!
       end
     end
 
-    task = Task::Deliver.new(
+    Task::Deliver.new(
       sender: account.actor,
       activity: activity
-    )
-    if Kemal.config.env == "test"
-      task.perform
-    else
-      task.schedule
-    end
+    ).schedule
 
     if activity.is_a?(ActivityPub::Activity::Create) || activity.is_a?(ActivityPub::Activity::Update)
       if activity.object.in_reply_to?

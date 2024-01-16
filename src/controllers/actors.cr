@@ -1,6 +1,9 @@
 require "../framework/controller"
 require "../models/task/refresh_actor"
 
+require "../models/relationship/content/follow/hashtag"
+require "../models/relationship/content/follow/mention"
+
 class ActorsController
   include Ktistec::Controller
 
@@ -63,7 +66,7 @@ class ActorsController
 
     timeline = actor.timeline(**pagination_params(env))
 
-    account.update_last_timeline_checked_at.save
+    account.update_last_timeline_checked_at
 
     ok "actors/timeline"
   end
@@ -82,7 +85,7 @@ class ActorsController
 
     notifications = actor.notifications(**pagination_params(env))
 
-    account.update_last_notifications_checked_at.save
+    account.update_last_notifications_checked_at
 
     ok "actors/notifications"
   end
@@ -115,7 +118,7 @@ class ActorsController
       not_found
     end
 
-    actor.block
+    actor.block!
 
     redirect back_path
   end
@@ -125,7 +128,7 @@ class ActorsController
       not_found
     end
 
-    actor.unblock
+    actor.unblock!
 
     redirect back_path
   end

@@ -14,6 +14,48 @@ module Ktistec
       Random::Secure.urlsafe_base64(8)
     end
 
+    # Renders content as simple text.
+    #
+    def render_as_text(content)
+      return "" if content.nil? || content.empty?
+      String.build do |build|
+        render_as_text(XML.parse_html("<div>#{content}</div>",
+          XML::HTMLParserOptions::RECOVER |
+          XML::HTMLParserOptions::NODEFDTD |
+          XML::HTMLParserOptions::NOIMPLIED |
+          XML::HTMLParserOptions::NOERROR |
+          XML::HTMLParserOptions::NOWARNING |
+          XML::HTMLParserOptions::NONET
+        ), build)
+      end.chomp
+    end
+
+    # not strictly block elements (`br` is inline), these are elements
+    # that should be replaced with a newline.
+
+    private BLOCK = [
+      "p",
+      "h1", "h2", "h3", "h4", "h5", "h6",
+      "ul", "ol", "li",
+      "dl", "dt", "dd",
+      "div", "figure",
+      "blockquote",
+      "pre",
+      "br"
+    ]
+
+    private def render_as_text(html, build)
+      name = html.name.downcase
+      if html.element? && name.in?(BLOCK)
+        html.children.each { |child| render_as_text(child, build) }
+        build << "\n"
+      elsif html.element? || html.document?
+        html.children.each { |child| render_as_text(child, build) }
+      elsif html.text?
+        html.to_s(build)
+      end
+    end
+
     # Cleans up the content we receive from others.
     #
     def sanitize(content)
@@ -112,6 +154,23 @@ module Ktistec
         build << "</p>" if empty
       elsif html.text?
         html.to_s(build)
+      end
+    end
+
+    # Converts the array of words to comma-separated sentence form
+    # where the last word is joined by a connector word (by default
+    # "and").
+    #
+    def to_sentence(array, *, words_connector = ", ", last_word_connector = " and ")
+      case array.size
+      when 0
+        ""
+      when 1
+        array[0].to_s
+      when 2
+        "#{array[0]}#{last_word_connector}#{array[1]}"
+      else
+        "#{array[0...-1].join(words_connector)}#{last_word_connector}#{array[-1]}"
       end
     end
 

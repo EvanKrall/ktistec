@@ -9,6 +9,32 @@ Spectator.describe Ktistec::Util do
     end
   end
 
+  describe ".render_as_text" do
+    it "ignores empty content" do
+      expect(described_class.render_as_text("")).to eq("")
+    end
+
+    it "removes inline markup" do
+      content = "this is <span><strong>some</strong> <em>text</em></span>"
+      expect(described_class.render_as_text(content)).to eq("this is some text")
+    end
+
+    it "replaces block elements with newlines" do
+      content = "<p>foo</p><p>bar</p>"
+      expect(described_class.render_as_text(content)).to eq("foo\nbar\n")
+    end
+
+    it "leaves bare text alone" do
+      content = "some text"
+      expect(described_class.render_as_text(content)).to eq("some text")
+    end
+
+    it "leaves escaped content alone" do
+      content = "&lt;foo&gt;"
+      expect(described_class.render_as_text(content)).to eq("&lt;foo&gt;")
+    end
+  end
+
   describe ".sanitize" do
     it "ignores empty content" do
       expect(described_class.sanitize("")).to eq("")
@@ -79,6 +105,32 @@ Spectator.describe Ktistec::Util do
     it "leaves escaped content alone" do
       content = "&lt;foo&gt;"
       expect(described_class.sanitize(content)).to eq("&lt;foo&gt;")
+    end
+  end
+
+  describe ".to_sentence" do
+    it "returns an empty string" do
+      expect(described_class.to_sentence([] of String)).to eq("")
+    end
+
+    it "returns the word" do
+      expect(described_class.to_sentence(["one"])).to eq("one")
+    end
+
+    it "returns the words in sentence form" do
+      expect(described_class.to_sentence(["one", "two"])).to eq("one and two")
+    end
+
+    it "returns the words in sentence form" do
+      expect(described_class.to_sentence(["one", "two", "three"])).to eq("one, two and three")
+    end
+
+    it "uses the specified words connector" do
+      expect(described_class.to_sentence(["one", "two", "three"], words_connector: " and ")).to eq("one and two and three")
+    end
+
+    it "uses the specified last word connector" do
+      expect(described_class.to_sentence(["one", "two", "three"], last_word_connector: " or ")).to eq("one, two or three")
     end
   end
 
