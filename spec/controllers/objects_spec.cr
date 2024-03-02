@@ -184,6 +184,49 @@ Spectator.describe ObjectsController do
     end
   end
 
+  describe "GET /objects/:id/replies" do
+    it "succeeds" do
+      get "/objects/#{visible.uid}/replies"
+      expect(response.status_code).to eq(200)
+    end
+
+    it "renders an empty collection" do
+      get "/objects/#{visible.uid}/replies"
+      expect(JSON.parse(response.body).dig("orderedItems").as_a).to be_empty
+    end
+
+    context "with a reply" do
+      before_each do
+        notvisible.assign(in_reply_to: visible).save
+      end
+
+      it "renders the collection" do
+        get "/objects/#{visible.uid}/replies"
+        expect(JSON.parse(response.body).dig("orderedItems").as_a).to contain_exactly(notvisible.iri)
+      end
+    end
+
+    it "returns 404 if object is a draft" do
+      get "/objects/#{draft.uid}/replies"
+      expect(response.status_code).to eq(404)
+    end
+
+    it "returns 404 if object is not visible" do
+      get "/objects/#{notvisible.uid}/replies"
+      expect(response.status_code).to eq(404)
+    end
+
+    it "returns 404 if object is remote" do
+      get "/objects/#{remote.uid}/replies"
+      expect(response.status_code).to eq(404)
+    end
+
+    it "returns 404 if object does not exist" do
+      get "/objects/000/replies"
+      expect(response.status_code).to eq(404)
+    end
+  end
+
   describe "GET /objects/:id/thread" do
     it "succeeds" do
       get "/objects/#{visible.uid}/thread", ACCEPT_HTML
@@ -944,7 +987,12 @@ Spectator.describe ObjectsController do
 
       it "follows the thread" do
         post "/remote/objects/#{remote.id}/follow"
-        expect(Relationship::Content::Follow::Thread.all.map(&.to_iri)).to contain_exactly(remote.iri)
+        expect(Relationship::Content::Follow::Thread.all.map(&.thread)).to contain_exactly(remote.iri)
+      end
+
+      it "begins fetching the thread" do
+        post "/remote/objects/#{remote.id}/follow"
+        expect(Task::Fetch::Thread.all.map(&.thread)).to contain_exactly(remote.iri)
       end
 
       context "within a turbo-frame" do
@@ -967,9 +1015,14 @@ Spectator.describe ObjectsController do
           expect(response.status_code).to eq(302)
         end
 
-        it "follows the root object of the thread" do
+        it "follows the thread" do
           post "/remote/objects/#{reply.id}/follow"
-          expect(Relationship::Content::Follow::Thread.all.map(&.to_iri)).to contain_exactly(remote.iri)
+          expect(Relationship::Content::Follow::Thread.all.map(&.thread)).to contain_exactly(remote.iri)
+        end
+
+        it "begins fetching the thread" do
+          post "/remote/objects/#{reply.id}/follow"
+          expect(Task::Fetch::Thread.all.map(&.thread)).to contain_exactly(remote.iri)
         end
 
         context "within a turbo-frame" do
@@ -980,6 +1033,38 @@ Spectator.describe ObjectsController do
 
           it "renders an unfollow button" do
             post "/remote/objects/#{reply.id}/follow", TURBO_FRAME
+            expect(body.xpath_nodes("//*[@id='thread_page_thread_controls']//button")).to have("Unfollow")
+          end
+        end
+      end
+
+      context "given an existing follow and fetch" do
+        let_create!(:follow_thread_relationship, actor: actor, thread: remote.thread)
+        let_create!(:fetch_thread_task, source: actor, thread: remote.thread)
+
+        it "succeeds" do
+          post "/remote/objects/#{remote.id}/follow"
+          expect(response.status_code).to eq(302)
+        end
+
+        it "does not change the count of follow relationships" do
+          expect{post "/remote/objects/#{remote.id}/follow"}.
+            not_to change{Relationship::Content::Follow::Thread.count(thread: remote.iri)}
+        end
+
+        it "does not change the count of fetch tasks" do
+          expect{post "/remote/objects/#{remote.id}/follow"}.
+            not_to change{Task::Fetch::Thread.count(thread: remote.iri)}
+        end
+
+        context "within a turbo-frame" do
+          it "succeeds" do
+            post "/remote/objects/#{remote.id}/follow", TURBO_FRAME
+            expect(response.status_code).to eq(200)
+          end
+
+          it "renders an unfollow button" do
+            post "/remote/objects/#{remote.id}/follow", TURBO_FRAME
             expect(body.xpath_nodes("//*[@id='thread_page_thread_controls']//button")).to have("Unfollow")
           end
         end
@@ -1006,10 +1091,27 @@ Spectator.describe ObjectsController do
     context "when authorized" do
       sign_in(as: actor.username)
 
-      context "given a follow" do
-        let_create(:object, named: :reply, in_reply_to: remote)
+      it "succeeds" do
+        post "/remote/objects/#{remote.id}/unfollow"
+        expect(response.status_code).to eq(302)
+      end
 
-        let_create!(:follow_thread_relationship, named: nil, actor: actor, thread: reply.thread)
+      context "within a turbo-frame" do
+        it "succeeds" do
+          post "/remote/objects/#{remote.id}/unfollow", TURBO_FRAME
+          expect(response.status_code).to eq(200)
+        end
+
+        it "renders a follow button" do
+          post "/remote/objects/#{remote.id}/unfollow", TURBO_FRAME
+          expect(body.xpath_nodes("//*[@id='thread_page_thread_controls']//button")).to have("Follow")
+        end
+      end
+
+      context "given a follow and fetch" do
+        let_create(:object, named: :reply, in_reply_to: remote)
+        let_create!(:follow_thread_relationship, actor: actor, thread: reply.thread)
+        let_create!(:fetch_thread_task, source: actor, thread: reply.thread)
 
         it "succeeds" do
           post "/remote/objects/#{remote.id}/unfollow"
@@ -1019,6 +1121,11 @@ Spectator.describe ObjectsController do
         it "unfollows the thread" do
           post "/remote/objects/#{remote.id}/unfollow"
           expect(Relationship::Content::Follow::Thread.all.map(&.to_iri)).to be_empty
+        end
+
+        it "stops fetching the thread" do
+          post "/remote/objects/#{remote.id}/unfollow"
+          expect(Task::Fetch::Thread.where(complete: true).map(&.subject_iri)).to eq([remote.iri])
         end
 
         context "within a turbo-frame" do
@@ -1046,6 +1153,11 @@ Spectator.describe ObjectsController do
             expect(Relationship::Content::Follow::Thread.all.map(&.to_iri)).to be_empty
           end
 
+          it "stops fetching the root object of the thread" do
+            post "/remote/objects/#{reply.id}/unfollow"
+            expect(Task::Fetch::Thread.where(complete: true).map(&.subject_iri)).to eq([remote.iri])
+          end
+
           context "within a turbo-frame" do
             it "succeeds" do
               post "/remote/objects/#{reply.id}/unfollow", TURBO_FRAME
@@ -1068,82 +1180,6 @@ Spectator.describe ObjectsController do
       it "returns 404 if object does not exist" do
         post "/remote/objects/999999/unfollow"
         expect(response.status_code).to eq(404)
-      end
-    end
-  end
-
-  describe "POST /remote/objects/fetch" do
-    it "returns 401 if not authorized" do
-      post "/remote/objects/fetch"
-      expect(response.status_code).to eq(401)
-    end
-
-    context "when authorized" do
-      sign_in(as: actor.username)
-
-      let_build(:object)
-
-      before_each do
-        HTTP::Client.objects << object
-        HTTP::Client.actors << object.attributed_to
-      end
-
-      it "succeeds" do
-        post "/remote/objects/fetch", FORM_DATA, "iri=#{URI.encode_www_form(object.iri)}"
-        expect(response.status_code).to eq(302)
-      end
-
-      it "succeeds" do
-        post "/remote/objects/fetch", JSON_DATA, %Q|{"iri":"#{object.iri}"}|
-        expect(response.status_code).to eq(302)
-      end
-
-      it "makes a request fetch the object" do
-        post "/remote/objects/fetch", FORM_DATA, "iri=#{URI.encode_www_form(object.iri)}"
-        expect(HTTP::Client.requests).to have("GET #{object.iri}")
-      end
-
-      it "makes a request fetch the object" do
-        post "/remote/objects/fetch", JSON_DATA, %Q|{"iri":"#{object.iri}"}|
-        expect(HTTP::Client.requests).to have("GET #{object.iri}")
-      end
-
-      it "makes a request to fetch the actor" do
-        post "/remote/objects/fetch", FORM_DATA, "iri=#{URI.encode_www_form(object.iri)}"
-        expect(HTTP::Client.requests).to have("GET #{object.attributed_to.iri}")
-      end
-
-      it "makes a request to fetch the actor" do
-        post "/remote/objects/fetch", JSON_DATA, %Q|{"iri":"#{object.iri}"}|
-        expect(HTTP::Client.requests).to have("GET #{object.attributed_to.iri}")
-      end
-
-      context "if object has been deleted" do
-        before_each { object.assign(iri: "https://remote/returns-404") }
-
-        it "renders an error message if post not found" do
-          post "/remote/objects/fetch", FORM_DATA, "iri=#{URI.encode_www_form(object.iri)}"
-          expect(XML.parse_html(response.body).xpath_nodes("//*[contains(@class,'message')]")).to have(/post could not be found/i)
-        end
-
-        it "renders an error message if post not found" do
-          post "/remote/objects/fetch", JSON_DATA, %Q|{"iri":"#{object.iri}"}|
-          expect(JSON.parse(response.body).dig("msg")).to eq(/post could not be found/i)
-        end
-      end
-
-      context "if author has been deleted" do
-        before_each { HTTP::Client.objects << object.assign(attributed_to_iri: "https://remote/returns-404") }
-
-        it "renders an error message if post's author not found" do
-          post "/remote/objects/fetch", FORM_DATA, "iri=#{URI.encode_www_form(object.iri)}"
-          expect(XML.parse_html(response.body).xpath_nodes("//*[contains(@class,'message')]")).to have(/author could not be found/i)
-        end
-
-        it "renders an error message if post's author not found" do
-          post "/remote/objects/fetch", JSON_DATA, %Q|{"iri":"#{object.iri}"}|
-          expect(JSON.parse(response.body).dig("msg")).to eq(/author could not be found/i)
-        end
       end
     end
   end

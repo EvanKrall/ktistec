@@ -1,10 +1,12 @@
 require "../framework/controller"
 require "../models/activity_pub/object/note"
+require "../models/relationship/content/follow/thread"
+require "../models/task/fetch/thread"
 
 class ObjectsController
   include Ktistec::Controller
 
-  skip_auth ["/objects/:id", "/objects/:id/thread"], GET
+  skip_auth ["/objects/:id", "/objects/:id/replies", "/objects/:id/thread"], GET
 
   post "/objects" do |env|
     object = ActivityPub::Object::Note.new(
@@ -13,6 +15,8 @@ class ObjectsController
     )
 
     unless object.assign(params(env)).valid?
+      recursive = false
+
       unprocessable_entity "objects/new"
     end
 
@@ -28,7 +32,23 @@ class ObjectsController
 
     redirect edit_object_path if object.draft?
 
+    recursive = false
+
     ok "objects/object"
+  end
+
+  get "/objects/:id/replies" do |env|
+    unless (object = get_object(env, iri_param(env, "/objects")))
+      not_found
+    end
+
+    redirect edit_object_path if object.draft?
+
+    replies = object.replies(for_actor: object.attributed_to)
+
+    recursive = false
+
+    ok "objects/replies"
   end
 
   get "/objects/:id/thread" do |env|
@@ -42,6 +62,8 @@ class ObjectsController
 
     follow = nil
 
+    task = nil
+
     ok "objects/thread"
   end
 
@@ -49,6 +71,8 @@ class ObjectsController
     unless (object = get_editable(env, iri_param(env, "/objects")))
       not_found
     end
+
+    recursive = false
 
     ok "objects/edit"
   end
@@ -59,6 +83,8 @@ class ObjectsController
     end
 
     unless object.assign(params(env)).valid?
+      recursive = false
+
       unprocessable_entity "objects/edit"
     end
 
@@ -82,6 +108,8 @@ class ObjectsController
       not_found
     end
 
+    recursive = false
+
     ok "objects/object"
   end
 
@@ -93,6 +121,8 @@ class ObjectsController
     thread = object.thread(for_actor: env.account.actor)
 
     follow = Relationship::Content::Follow::Thread.find?(actor: env.account.actor, thread: thread.first.thread)
+
+    task = Task::Fetch::Thread.find?(source: env.account.actor, thread: thread.first.thread)
 
     ok "objects/thread"
   end
@@ -158,7 +188,11 @@ class ObjectsController
 
     thread.first.save # lazy migration -- ensure the `thread` property is up to date
 
-    follow = Relationship::Content::Follow::Thread.new(actor: env.account.actor, thread: thread.first.thread).save
+    follow = Relationship::Content::Follow::Thread.find_or_new(actor: env.account.actor, thread: thread.first.thread)
+    follow.save if follow.new_record?
+
+    task = Task::Fetch::Thread.find_or_new(source: env.account.actor, thread: thread.first.thread)
+    task.schedule if task.runnable? || task.complete
 
     if turbo_frame?
       ok "objects/thread"
@@ -174,36 +208,17 @@ class ObjectsController
 
     thread = object.thread(for_actor: env.account.actor)
 
-    follow = Relationship::Content::Follow::Thread.find(actor: env.account.actor, thread: thread.first.thread).destroy
+    follow = Relationship::Content::Follow::Thread.find?(actor: env.account.actor, thread: thread.first.thread)
+    follow.destroy if follow
+
+    task = Task::Fetch::Thread.find?(source: env.account.actor, thread: thread.first.thread)
+    task.complete! if task
 
     if turbo_frame?
       ok "objects/thread"
     else
       redirect back_path
     end
-  end
-
-  post "/remote/objects/fetch" do |env|
-    params = accepts?("text/html") ? env.params.body : env.params.json
-
-    iri = params["iri"].to_s
-
-    begin
-      message = nil
-      unless (object = ActivityPub::Object.dereference?(env.account.actor, iri))
-        message = "The post could not be found or could not be retrieved."
-      end
-      unless message || (object && object.attributed_to?(env.account.actor, dereference: true))
-        message = "The post's author could not be found or could not be retrieved."
-      end
-    end
-
-    if message
-      bad_gateway "objects/partials/fetch", operation: "replace", target: "thread-fetch"
-    end
-
-    object.not_nil!.save
-    redirect back_path
   end
 
   private def self.params(env)

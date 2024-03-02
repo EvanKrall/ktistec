@@ -384,11 +384,6 @@ Spectator.describe ActivityPub::Object do
     let_build(:create, actor: actor, object: post5)
     let_build(:outbox_relationship, named: :outbox, owner: actor, activity: create)
 
-    it "includes posts only once" do
-      outbox.save
-      expect(described_class.public_posts(1, 2)).to eq([post5, post4])
-    end
-
     it "paginates the results" do
       expect(described_class.public_posts(1, 2)).to eq([post5, post4])
       expect(described_class.public_posts(3, 2)).to eq([post1])
@@ -457,11 +452,6 @@ Spectator.describe ActivityPub::Object do
 
     let_build(:create, actor: actor, object: post5)
     let_build(:outbox_relationship, named: :outbox, owner: actor, activity: create)
-
-    it "counts posts only once" do
-      outbox.save
-      expect(described_class.public_posts_count).to eq(5)
-    end
 
     it "returns the count" do
       expect(described_class.public_posts_count).to eq(5)
@@ -556,25 +546,6 @@ Spectator.describe ActivityPub::Object do
         end
       end
     end
-
-    context "given a follow" do
-      let_create(:actor)
-      let_create!(:follow_thread_relationship, named: nil, actor: actor, thread: object.save.thread)
-
-      def all_follows ; Relationship::Content::Follow::Thread.all end
-
-      it "updates follow relationships when thread changes" do
-        expect{object.assign(in_reply_to_iri: "https://elsewhere").save}.to change{all_follows.map(&.to_iri)}.to(["https://elsewhere"])
-      end
-
-      context "given an existing follow relationship" do
-        let_create!(:follow_thread_relationship, named: nil, actor: actor, thread: "https://elsewhere")
-
-        it "updates follow relationships when thread changes" do
-          expect{object.assign(in_reply_to_iri: "https://elsewhere").save}.to change{all_follows.map(&.to_iri)}.to(["https://elsewhere"])
-        end
-      end
-    end
   end
 
   context "when threaded" do
@@ -665,6 +636,88 @@ Spectator.describe ActivityPub::Object do
             object4.assign(attributed_to: actor).save
             expect(subject.with_replies_count!(actor).replies_count).to eq(1)
           end
+        end
+      end
+    end
+
+    describe "#replies" do
+      let_build(:actor)
+
+      it "returns replies" do
+        expect(subject.replies(for_actor: actor)).to eq([object1, object4])
+        expect(object1.replies(for_actor: actor)).to eq([object2])
+        expect(object5.replies(for_actor: actor)).to be_empty
+      end
+
+      it "omits deleted replies" do
+        object4.delete!
+        expect(subject.replies(for_actor: actor)).to eq([object1])
+      end
+
+      it "omits blocked replies" do
+        object4.block!
+        expect(subject.replies(for_actor: actor)).to eq([object1])
+      end
+
+      it "omits destroyed replies" do
+        object4.destroy
+        expect(subject.replies(for_actor: actor)).to eq([object1])
+      end
+
+      it "omits replies with deleted attributed to actors" do
+        actor4.delete!
+        expect(subject.replies(for_actor: actor)).to eq([object1])
+      end
+
+      it "omits replies with blocked attributed to actors" do
+        actor4.block!
+        expect(subject.replies(for_actor: actor)).to eq([object1])
+      end
+
+      it "omits replies with destroyed attributed to actors" do
+        actor4.destroy
+        expect(subject.replies(for_actor: actor)).to eq([object1])
+      end
+
+      it "omits unapproved replies" do
+        expect(subject.replies(approved_by: actor)).to be_empty
+      end
+
+      context "and an approved object" do
+        let_create!(:approved_relationship, named: :approved, actor: actor, object: object4)
+
+        it "returns approved replies" do
+          expect(subject.replies(approved_by: actor)).to eq([object4])
+        end
+
+        it "omits deleted replies" do
+          object4.delete!
+          expect(subject.replies(approved_by: actor)).to be_empty
+        end
+
+        it "omits blocked replies" do
+          object4.block!
+          expect(subject.replies(approved_by: actor)).to be_empty
+        end
+
+        it "omits destroyed replies" do
+          object4.destroy
+          expect(subject.replies(approved_by: actor)).to be_empty
+        end
+
+        it "omits replies with deleted attributed to actors" do
+          actor4.delete!
+          expect(subject.replies(approved_by: actor)).to be_empty
+        end
+
+        it "omits replies with blocked attributed to actors" do
+          actor4.block!
+          expect(subject.replies(approved_by: actor)).to be_empty
+        end
+
+        it "omits replies with destroyed attributed to actors" do
+          actor4.destroy
+          expect(subject.replies(approved_by: actor)).to be_empty
         end
       end
     end
@@ -878,6 +931,26 @@ Spectator.describe ActivityPub::Object do
 
     it "returns true" do
       expect(subject.external?).to be_true
+    end
+  end
+
+  describe "#root?" do
+    subject do
+      described_class.new(
+        iri: "https://test.test/objects/#{random_string}"
+      ).save
+    end
+
+    it "returns true if root" do
+      expect(subject.root?).to be_true
+    end
+
+    it "returns false if a reply" do
+      expect(subject.assign(in_reply_to_iri: "https://root").root?).to be_false
+    end
+
+    it "returns false if not root" do
+      expect(subject.assign(thread: "https://root").root?).to be_false
     end
   end
 

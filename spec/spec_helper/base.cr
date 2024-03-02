@@ -40,6 +40,16 @@ class Regex
   end
 end
 
+class HTTP::Request
+  def ===(other : String)
+    other == "#{self.method} #{self.resource}"
+  end
+
+  def ===(other : Regex)
+    other =~ "#{self.method} #{self.resource}"
+  end
+end
+
 class XML::Node
   def ==(other : String)
     other == self.content
@@ -61,6 +71,10 @@ end
 class Account
   private def cost
     4 # reduce the cost of computing a bcrypt hash
+  end
+
+  private def size
+    512 # reduce the size of the generated rsa key
   end
 end
 
@@ -131,4 +145,15 @@ Kemal.config.env = ENV["KEMAL_ENV"]? || "test"
 
 Ktistec.settings.assign({"host" => "https://test.test", "site" => "Test"}).save
 
-Log.setup_from_env
+# Spectator calls `setup_from_env` to set up logging. the dispatcher
+# default (`DispatchMode::Async`) does not work -- probably due to:
+# https://github.com/icy-arctic-fox/spectator/issues/27
+
+# and, even if this is fixed, we prefer synchronous output when
+# running specs.
+
+class Log
+  def self.setup_from_env(*, dispatcher : DispatchMode = DispatchMode::Sync, default_level : Severity = Severity::None)
+    previous_def(backend: IOBackend.new(dispatcher: dispatcher), default_level: default_level)
+  end
+end

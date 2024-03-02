@@ -69,7 +69,7 @@ Spectator.describe "notifications partial" do
     end
 
     context "given a hashtag notification" do
-      let_build(:object)
+      let_build(:object, published: Time.utc)
       let_create!(:notification_hashtag, owner: actor, object: object)
 
       let_create!(:follow_hashtag_relationship, named: nil, actor: actor, name: "foo")
@@ -82,6 +82,33 @@ Spectator.describe "notifications partial" do
       it "renders a tagged message" do
         expect(subject.xpath_nodes("//article[contains(@class,'event')]//text()").join).
           to eq("#{object.attributed_to.display_name} tagged a post with #foo.")
+      end
+
+      context "and multiple objects with nearly the same created_at time" do
+        let_create!(:object, named: object1, published: Time.utc)
+        let_create!(:object, named: object2, published: Time.utc)
+
+        before_each do
+          Factory.create(:hashtag, name: "bar", subject: object1)
+          Factory.create(:hashtag, name: "bar", subject: object2)
+        end
+
+        it "renders a tagged message" do
+          expect(subject.xpath_nodes("//article[contains(@class,'event')]//text()").join).
+            to eq("#{object.attributed_to.display_name} tagged a post with #foo.")
+        end
+
+        context "with the same hashtag" do
+          before_each do
+            Factory.create(:hashtag, name: "foo", subject: object1)
+            Factory.create(:hashtag, name: "foo", subject: object2)
+          end
+
+          it "renders a different message" do
+            expect(subject.xpath_nodes("//article[contains(@class,'event')]//text()").join).
+              to eq("There are new posts tagged with #foo.")
+          end
+        end
       end
     end
 
@@ -102,13 +129,28 @@ Spectator.describe "notifications partial" do
       end
     end
 
-    context "given a thread notification" do
+    context "given a thread notification for a reply" do
       let_build(:object)
-      let_create!(:notification_thread, owner: actor, object: object)
+      let_build(:object, named: reply, in_reply_to: object)
+      let_create!(:notification_thread, owner: actor, object: reply)
+
+      pre_condition { expect(reply.root?).to be_false }
 
       it "renders a replied to message" do
         expect(subject.xpath_nodes("//article[contains(@class,'event')]//text()").join).
-          to eq("#{object.attributed_to.display_name} replied to a thread you follow.")
+          to eq("#{reply.attributed_to.display_name} replied to a thread you follow.")
+      end
+    end
+
+    context "given a thread notification for the root" do
+      let_build(:object)
+      let_create!(:notification_thread, owner: actor, object: object)
+
+      pre_condition { expect(object.root?).to be_true }
+
+      it "renders a fetch the root of the thread message" do
+        expect(subject.xpath_nodes("//article[contains(@class,'event')]//text()").join).
+          to eq("There are replies to a thread you follow.")
       end
     end
   end

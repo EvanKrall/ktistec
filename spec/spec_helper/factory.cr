@@ -56,7 +56,7 @@ def actor_factory(clazz = ActivityPub::Actor, with_keys = false, local = nil, **
   iri = local ? "https://test.test/actors/#{username}" : "https://remote/actors/#{username}"
   pem_public_key, pem_private_key =
     if with_keys
-      keypair = OpenSSL::RSA.generate(2048, 17)
+      keypair = OpenSSL::RSA.generate(512, 17)
       {keypair.public_key.to_pem, keypair.to_pem}
     else
       {nil, nil}
@@ -264,6 +264,20 @@ end
 
 def canonical_relationship_factory(**options)
   relationship_factory(Relationship::Content::Canonical, **options)
+end
+
+# task factories
+
+def task_factory(clazz = Task, source_iri = "https://source/#{random_string}", subject_iri = "https://subject/#{random_string}", **options)
+  clazz.new({"source_iri" => source_iri, "subject_iri" => subject_iri}.merge(options.to_h.transform_keys(&.to_s)).compact)
+end
+
+def fetch_hashtag_task_factory(**options)
+  task_factory(Task::Fetch::Hashtag, **options)
+end
+
+def fetch_thread_task_factory(**options)
+  task_factory(Task::Fetch::Thread, **options)
 end
 
 # tag factories

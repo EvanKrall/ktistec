@@ -91,13 +91,22 @@
                 ht1 = object.hashtags.map(&.name.downcase)
                 ht2 = Relationship::Content::Follow::Hashtag.where(actor: actor).map(&.name.downcase)
                 ht3 = (ht1 & ht2)
-              a> href=remote_actor_path(attributed_to) = attributed_to.display_name
-              | tagged
-              a<> href=remote_object_path(object) a post
-              | with
-              - ht3.each do |hashtag|
-                a< href=hashtag_path(hashtag) ##{hashtag}
-              | .
+                ht4 = ht3.select do |ht|
+                  Tag::Hashtag.count_all_objects(ht, created_after: object.created_at - 1.minute) > 1
+                end
+              - if ht4.empty?
+                a> href=remote_actor_path(attributed_to) = attributed_to.display_name
+                | tagged
+                a<> href=remote_object_path(object) a post
+                | with
+                - ht3.each do |hashtag|
+                  a< href=hashtag_path(hashtag) ##{hashtag}
+                | .
+              - else
+                | There are new posts tagged with
+                - ht4.each do |hashtag|
+                  a< href=hashtag_path(hashtag) ##{hashtag}
+                | .
             - if content
               .extra.meta.truncated
                 == content
@@ -168,9 +177,14 @@
               i.user.icon
           .content
             .summary
-              a> href=remote_actor_path(attributed_to) = attributed_to.display_name
-              a> href=remote_object_path(object) replied to a thread
-              | you follow.
+              - if object.iri == object.thread
+                | There are replies to
+                a<> href=remote_thread_path(object) a thread
+                | you follow.
+              - else
+                a> href=remote_actor_path(attributed_to) = attributed_to.display_name
+                a> href=remote_object_path(object) replied to a thread
+                | you follow.
             - if content
               .extra.meta.truncated
                 == content

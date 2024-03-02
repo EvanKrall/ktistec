@@ -6,7 +6,6 @@ require "../activity_pub"
 require "../activity_pub/mixins/blockable"
 require "../relationship/content/approved"
 require "../relationship/content/canonical"
-require "../relationship/content/follow/thread"
 require "../../framework/json_ld"
 require "../../framework/model"
 require "../../framework/model/**"
@@ -156,6 +155,10 @@ module ActivityPub
       @@external
     end
 
+    def root?
+      @iri == @thread && @in_reply_to_iri.nil?
+    end
+
     def draft?
       published.nil? && local?
     end
@@ -177,11 +180,6 @@ module ActivityPub
       (published || created_at).in(timezone)
     end
 
-    # NOTE: in the following three queries, the query planner does not
-    # always pick the optimal query plan. use cross joins to force
-    # sqlite to use a plan that has been seen to work well in
-    # practice.
-
     # Returns federated posts.
     #
     # Includes local posts. Does not include private (not visible)
@@ -191,28 +189,15 @@ module ActivityPub
       query = <<-QUERY
           SELECT #{Object.columns(prefix: "o")}
             FROM objects AS o
-      CROSS JOIN actors AS t
+            JOIN actors AS t
               ON t.iri = o.attributed_to_iri
            WHERE o.visible = 1
              AND o.deleted_at is NULL
              AND o.blocked_at is NULL
              AND t.deleted_at IS NULL
              AND t.blocked_at IS NULL
-             AND o.id NOT IN (
-                SELECT o.id
-                  FROM objects AS o
-            CROSS JOIN actors AS t
-                    ON t.iri = o.attributed_to_iri
-                 WHERE o.visible = 1
-                   AND o.deleted_at is NULL
-                   AND o.blocked_at is NULL
-                   AND t.deleted_at IS NULL
-                   AND t.blocked_at IS NULL
-              ORDER BY o.published DESC
-                 LIMIT ?
-             )
         ORDER BY o.published DESC
-           LIMIT ?
+           LIMIT ? OFFSET ?
       QUERY
       Object.query_and_paginate(query, page: page, size: size)
     end
@@ -223,50 +208,27 @@ module ActivityPub
     #
     def self.public_posts(page = 1, size = 10)
       query = <<-QUERY
-          SELECT DISTINCT #{Object.columns(prefix: "o")}
+          SELECT #{Object.columns(prefix: "o")}
             FROM accounts AS c
-      CROSS JOIN relationships AS r
-              ON r.from_iri = c.iri
+            JOIN relationships AS r
+              ON likelihood(r.from_iri = c.iri, 0.99)
              AND r.type = "#{Relationship::Content::Outbox}"
-      CROSS JOIN activities AS a
+            JOIN activities AS a
               ON a.iri = r.to_iri
              AND a.type IN ("#{ActivityPub::Activity::Announce}", "#{ActivityPub::Activity::Create}")
-      CROSS JOIN objects AS o
+            JOIN objects AS o
               ON o.iri = a.object_iri
             JOIN actors AS t
               ON t.iri = o.attributed_to_iri
            WHERE o.visible = 1
-             AND o.in_reply_to_iri IS NULL
+             AND likelihood(o.in_reply_to_iri IS NULL, 0.25)
              AND o.deleted_at IS NULL
              AND o.blocked_at IS NULL
              AND t.deleted_at IS NULL
              AND t.blocked_at IS NULL
              AND a.undone_at IS NULL
-             AND o.id NOT IN (
-                SELECT DISTINCT o.id
-                  FROM accounts AS c
-            CROSS JOIN relationships AS r
-                    ON r.from_iri = c.iri
-                   AND r.type = "#{Relationship::Content::Outbox}"
-            CROSS JOIN activities AS a
-                    ON a.iri = r.to_iri
-                   AND a.type IN ("#{ActivityPub::Activity::Announce}", "#{ActivityPub::Activity::Create}")
-            CROSS JOIN objects AS o
-                    ON o.iri = a.object_iri
-                  JOIN actors AS t
-                    ON t.iri = o.attributed_to_iri
-                 WHERE o.visible = 1
-                   AND o.in_reply_to_iri IS NULL
-                   AND o.deleted_at IS NULL
-                   AND o.blocked_at IS NULL
-                   AND t.deleted_at IS NULL
-                   AND t.blocked_at IS NULL
-                   AND a.undone_at IS NULL
-              ORDER BY r.created_at DESC
-                 LIMIT ?
-             )
-          ORDER BY r.created_at DESC
-             LIMIT ?
+          ORDER BY r.id DESC
+             LIMIT ? OFFSET ?
       QUERY
       Object.query_and_paginate(query, page: page, size: size)
     end
@@ -277,20 +239,20 @@ module ActivityPub
     #
     def self.public_posts_count
       query = <<-QUERY
-          SELECT COUNT(DISTINCT o.id)
+          SELECT COUNT(o.id)
             FROM accounts AS c
-      CROSS JOIN relationships AS r
-              ON r.from_iri = c.iri
+            JOIN relationships AS r
+              ON likelihood(r.from_iri = c.iri, 0.99)
              AND r.type = "#{Relationship::Content::Outbox}"
-      CROSS JOIN activities AS a
+            JOIN activities AS a
               ON a.iri = r.to_iri
              AND a.type IN ("#{ActivityPub::Activity::Announce}", "#{ActivityPub::Activity::Create}")
-      CROSS JOIN objects AS o
+            JOIN objects AS o
               ON o.iri = a.object_iri
             JOIN actors AS t
               ON t.iri = o.attributed_to_iri
            WHERE o.visible = 1
-             AND o.in_reply_to_iri IS NULL
+             AND likelihood(o.in_reply_to_iri IS NULL, 0.25)
              AND o.deleted_at IS NULL
              AND o.blocked_at IS NULL
              AND t.deleted_at IS NULL
@@ -367,6 +329,57 @@ module ActivityPub
       from_iri = approved_by.responds_to?(:iri) ? approved_by.iri : approved_by.to_s
       Object.scalar(query, iri, from_iri).as(Int64?).try { |replies_count| self.replies_count = replies_count }
       self
+    end
+
+    # Returns all replies to this object.
+    #
+    # Intended for presenting an object's replies to an authorized
+    # user (one who may see all objects).
+    #
+    # The `for_actor` parameter must be specified to disambiguate this
+    # method from the `replies` property getter, but is not currently
+    # used.
+    #
+    def replies(*, for_actor)
+      query = <<-QUERY
+         SELECT #{Object.columns(prefix: "o")}
+           FROM objects AS o
+           JOIN actors AS a
+             ON a.iri = o.attributed_to_iri
+          WHERE o.in_reply_to_iri = ?
+            AND o.deleted_at IS NULL
+            AND o.blocked_at IS NULL
+            AND a.deleted_at IS NULL
+            AND a.blocked_at IS NULL
+       ORDER BY o.published DESC
+      QUERY
+      Object.query_all(query, iri)
+    end
+
+    # Returns all replies to this object which have been approved by
+    # `approved_by`.
+    #
+    # Intended for presenting an object's replies to an unauthorized
+    # user (one who may not see all objects e.g. an anonymous user).
+    #
+    def replies(*, approved_by)
+      query = <<-QUERY
+         SELECT #{Object.columns(prefix: "o")}
+           FROM objects AS o
+           JOIN actors AS a
+             ON a.iri = o.attributed_to_iri
+           JOIN relationships AS r
+             ON r.type = "#{Relationship::Content::Approved}"
+            AND r.from_iri = ? AND r.to_iri = o.iri
+          WHERE o.in_reply_to_iri = ?
+            AND o.deleted_at IS NULL
+            AND o.blocked_at IS NULL
+            AND a.deleted_at IS NULL
+            AND a.blocked_at IS NULL
+       ORDER BY o.published DESC
+      QUERY
+      from_iri = approved_by.responds_to?(:iri) ? approved_by.iri : approved_by.to_s
+      Object.query_all(query, from_iri, iri)
     end
 
     @[Assignable]
@@ -532,7 +545,7 @@ module ActivityPub
             AND t.deleted_at IS NULL
             AND t.blocked_at IS NULL
             AND a.undone_at IS NULL
-       ORDER BY a.created_at ASC
+       ORDER BY a.id ASC
       QUERY
       Activity.query_all(query, iri)
     end
@@ -612,16 +625,9 @@ module ActivityPub
           reply.save
         end
       end
-      # update thread in follow relationships
-      if self.iri != self.thread
-        Relationship::Content::Follow::Thread.where(thread: self.iri).each do |follow|
-          unless Relationship::Content::Follow::Thread.find?(actor: follow.actor, thread: self.thread)
-            follow.assign(thread: self.thread).save
-          else
-            follow.destroy
-          end
-        end
-      end
+      # see the source for Relationship::Content::Follow::Thread and
+      # Task::Fetch::Thread for additional after_save thread updating
+      # functionality
     end
 
     def after_delete
