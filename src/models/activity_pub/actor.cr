@@ -481,7 +481,7 @@ module ActivityPub
     # May be filtered to include only objects with associated
     # relationships of the specified type (via `inclusion`).
     #
-    def timeline(exclude_replies = false, inclusion = nil, page = 1, size = 10)
+    def timeline(exclude_replies = false, inclusion = nil, page = 1, size = 100)
       exclude_replies =
         exclude_replies ?
         "AND likelihood(o.in_reply_to_iri IS NULL, 0.25)" :
